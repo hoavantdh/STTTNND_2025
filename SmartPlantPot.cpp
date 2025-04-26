@@ -1,9 +1,8 @@
-// Khai báo thông tin cấu hình Blynk
+//Smart Plant Pot
 #define BLYNK_TEMPLATE_ID "TMPL6wKNtCWZG"
 #define BLYNK_TEMPLATE_NAME "Smart Plant Pot"
 #define BLYNK_AUTH_TOKEN "odZkXdRoUMBsHJ2KAJF6HJUTiZUaevKn"
 
-// Thư viện cần thiết cho các chức năng
 #include <Arduino.h>
 #include <WiFi.h>
 #include <BlynkSimpleEsp32.h>
@@ -17,13 +16,14 @@
 #include <BH1750.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
+#include "time.h"
 
-// Thư viện BLE
+// BLE
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEServer.h>
 
-// Khai báo chân ảo Blynk
+// Virtual Pins
 #define VIRTUAL_TEMP V0
 #define VIRTUAL_HUMID V1
 #define VIRTUAL_MOIST V2
@@ -31,26 +31,29 @@
 #define VIRTUAL_PUMP V4
 #define VIRTUAL_LIGHT V5
 
-// Khai báo chân phần cứng
+// Hardware Pins
 #define LED_PIN 26
 #define DHTPIN 5
 #define DHTTYPE DHT11
 #define PUMP_PIN 18
-const int moisturePin = 34; // Cảm biến độ ẩm đất
+const int moisturePin = 34;
 
-// Khởi tạo các đối tượng cảm biến
-LiquidCrystal_I2C lcd(0x27, 16, 2); // Màn hình LCD I2C
-DHT dht(DHTPIN, DHTTYPE);           // Cảm biến DHT11
-BH1750 lightMeter(0x23);            // Cảm biến ánh sáng
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+DHT dht(DHTPIN, DHTTYPE);
+BH1750 lightMeter(0x23); // địa chỉ mặc định BH1750
 
-// ===== Cấu hình BLE =====
+//Khai báo lấy realtime
+const char* ntpServer = "pool.ntp.org";
+const long  gmtOffset_sec = 7 * 3600;  // GMT+7
+const int   daylightOffset_sec = 0;
+
+// ==== BLE setup ====
 BLECharacteristic *pBLECharacteristic;
 std::string bleStatus = "⏳ Đang chờ dữ liệu từ BLE...";
 bool newBLEDataReceived = false;
 String bleReceivedData = "";
 bool wifiReady = false;
 
-// Lớp xử lý sự kiện BLE khi có thiết bị gửi dữ liệu
 class BLECallback : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *pCharacteristic) override {
     std::string value = pCharacteristic->getValue();
@@ -59,7 +62,6 @@ class BLECallback : public BLECharacteristicCallbacks {
       bleReceivedData.trim();
       newBLEDataReceived = true;
 
-      // Phản hồi lại trạng thái kết nối BLE
       pCharacteristic->setValue(bleStatus);
       pCharacteristic->notify();
     }
@@ -70,13 +72,11 @@ class BLECallback : public BLECharacteristicCallbacks {
   }
 };
 
-// Hàm thiết lập BLE
 void setupBLE() {
   BLEDevice::init("SmartPlantPot");
   BLEServer *pServer = BLEDevice::createServer();
   BLEService *pService = pServer->createService("12345678-1234-1234-1234-1234567890ab");
 
-  // Tạo đặc điểm BLE để nhận/gửi dữ liệu
   pBLECharacteristic = pService->createCharacteristic(
     "abcdefab-1234-5678-90ab-abcdefabcdef",
     BLECharacteristic::PROPERTY_WRITE |
@@ -90,11 +90,9 @@ void setupBLE() {
   pAdvertising->start();
 }
 
-// Biến lưu thông tin WiFi nhận qua BLE
 String ssid_input = "";
 String password_input = "";
 
-// Hàm kết nối WiFi
 void setup_wifi() {
   WiFi.begin(ssid_input.c_str(), password_input.c_str());
   int retry = 0;
@@ -103,7 +101,6 @@ void setup_wifi() {
     retry++;
   }
 
-  // Gửi trạng thái kết nối WiFi qua BLE
   if (WiFi.status() == WL_CONNECTED) {
     wifiReady = true;
     bleStatus = "✅ Kết nối WiFi thành công!";
@@ -115,13 +112,11 @@ void setup_wifi() {
   pBLECharacteristic->notify();
 }
 
-// Xử lý khi người dùng điều khiển máy bơm trên app Blynk
 BLYNK_WRITE(VIRTUAL_PUMP) {
   int pumpState = param.asInt();
   digitalWrite(PUMP_PIN, pumpState);
 }
 
-// Thiết lập ban đầu
 void setup() {
   Serial.begin(115200);
   lcd.begin(16, 2);
@@ -129,22 +124,20 @@ void setup() {
   lcd.backlight();
   lcd.setCursor(0, 0);
   lcd.print("Khoi dong...");
-
+  
   SPI.begin();
-  setupBLE();        // Khởi động BLE
-  setup_wifi();      // Kết nối WiFi
-  dht.begin();       // Bắt đầu cảm biến DHT11
-  Wire.begin();      // Khởi động I2C
-  lightMeter.begin();// Bắt đầu cảm biến ánh sáng
+  setupBLE();
+  setup_wifi();
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  dht.begin();
+  Wire.begin(); // I2C
+  lightMeter.begin();
 
-  // Cấu hình chân xuất
   pinMode(LED_PIN, OUTPUT);
   pinMode(PUMP_PIN, OUTPUT);
 }
 
-// Vòng lặp chính
 void loop() {
-  // Nếu chưa kết nối WiFi và nhận được dữ liệu từ BLE thì tiến hành kết nối
   if (!wifiReady && newBLEDataReceived) {
     if (bleReceivedData.indexOf(',') != -1) {
       int splitIndex = bleReceivedData.indexOf(',');
@@ -153,7 +146,7 @@ void loop() {
       ssid_input.trim();
       password_input.trim();
 
-      setup_wifi(); // Thử kết nối
+      setup_wifi();
       if (wifiReady) {
         Blynk.begin(BLYNK_AUTH_TOKEN, ssid_input.c_str(), password_input.c_str());
         lcd.clear();
@@ -163,23 +156,21 @@ void loop() {
       }
     }
   }
+  Blynk.run();
 
-  Blynk.run(); // Chạy tiến trình Blynk
-
-  // Đọc dữ liệu từ các cảm biến
   int temperature = dht.readTemperature();
   int humidity = dht.readHumidity();
   int soilMoistureValue = analogRead(moisturePin);
-  int moisture = map(soilMoistureValue, 4095, 0, 0, 100); // Quy đổi về %
+  int moisture = map(soilMoistureValue, 4095, 0, 0, 100);
   float lux = lightMeter.readLightLevel();
 
-  // Gửi dữ liệu cảm biến lên Blynk
+  // Gửi dữ liệu lên Blynk
   Blynk.virtualWrite(VIRTUAL_TEMP, temperature);
   Blynk.virtualWrite(VIRTUAL_HUMID, humidity);
   Blynk.virtualWrite(VIRTUAL_MOIST, moisture);
   Blynk.virtualWrite(VIRTUAL_LIGHT, lux);
 
-  // Tự động điều khiển máy bơm
+  // Điều khiển máy bơm tự động
   if (moisture <= 30) {
     digitalWrite(PUMP_PIN, HIGH);
     Blynk.virtualWrite(VIRTUAL_PUMP, 1);
@@ -188,18 +179,40 @@ void loop() {
     Blynk.virtualWrite(VIRTUAL_PUMP, 0);
   }
 
-  // Tự động điều khiển LED theo ánh sáng
-  if (lux < 50) {
-    digitalWrite(LED_PIN, HIGH);
-    Blynk.virtualWrite(VIRTUAL_LED, 1);
+  // Điều khiển đèn LED
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Failed to get time");
+    return;
+  }
+
+  int currentHour = timeinfo.tm_hour;
+  if (currentHour >= 6 && currentHour < 18) {
+    if (lux < 50) {
+      digitalWrite(LED_PIN, HIGH);
+      Blynk.virtualWrite(VIRTUAL_LED, 1);
+    } else {
+      digitalWrite(LED_PIN, LOW);
+      Blynk.virtualWrite(VIRTUAL_LED, 0);
+    }
   } else {
-    digitalWrite(LED_PIN, LOW);
+    digitalWrite(LED_PIN, LOW);  
     Blynk.virtualWrite(VIRTUAL_LED, 0);
   }
 
-  // ===== Hiển thị LCD luân phiên =====
+  // LCD: Hiển thị thời gian
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Thoi gian: ");
+  lcd.setCursor(0, 1);
+  lcd.print(timeinfo.tm_hour); lcd.print(":");
+  lcd.print(timeinfo.tm_min); lcd.print(":");
+  lcd.print(timeinfo.tm_sec);
+  delay(2500);
 
-  // Hiển thị nhiệt độ và độ ẩm không khí
+  // LCD: Hiển thị nhiệt độ & độ ẩm
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("Nhiet: "); lcd.print(temperature); lcd.print("C");
@@ -207,7 +220,7 @@ void loop() {
   lcd.print("Do am: "); lcd.print(humidity); lcd.print("%");
   delay(2500);
 
-  // Hiển thị độ ẩm đất
+  // LCD: Độ ẩm đất
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("Do am dat: ");
@@ -215,7 +228,7 @@ void loop() {
   lcd.print(moisture); lcd.print(" %");
   delay(2500);
 
-  // Hiển thị cường độ ánh sáng
+  // LCD: Cường độ ánh sáng
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("Anh sang: ");
@@ -223,7 +236,7 @@ void loop() {
   lcd.print((int)lux); lcd.print(" lux");
   delay(2500);
 
-  // Hiển thị trạng thái WiFi
+  // LCD: Trạng thái WiFi
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("WiFi: ");
@@ -238,7 +251,7 @@ void loop() {
   }
   delay(2500);
 
-  // === Điều khiển thủ công qua Serial Monitor ===
+  // Serial thủ công
   if (Serial.available()) {
     char cmd = Serial.read();
     if (cmd == '1') {
